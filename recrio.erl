@@ -173,7 +173,7 @@ exec(<<16#04:6, Rs:5, Rt:5, Offset0:16>>, Context) ->
 
 % bne
 exec(<<16#05:6, Rs:5, Rt:5, Offset0:16>>, Context) ->
-    NewPC = bit:bit_add(context:get_pc(Context), bit:sign_extension(Offset0)),
+   NewPC = bit:bit_add(context:get_pc(Context), bit:sign_extension(Offset0)),
    io:format("beq reg(~p) != reg(~p)? --> ~p~n", [Rs, Rt, NewPC]),
    Storage = context:get_storage(Context),
    RsReg = storage:read_reg(Storage, Rs),
@@ -190,6 +190,23 @@ exec(<<16#00:6, Code:20, 16#0D:6>>, Context) ->
    self() ! {break, Code},
    Context;
 
+% jal
+exec(<<16#03:6, Target0:26>>, Context) ->
+   <<Prefix:4, _/bits>> = context:get_pc(Context), 
+   Target = <<Prefix:4, Target0:26, 0:2>>, 
+   io:format("jal ~p~n", [Target]),
+   Storage = context:get_storage(Context),
+   storage:write_reg(Storage, 31, context:get_pc(Context)),
+   context:update_pc(Target);
+
+% jalr
+exec(<<16#00:6, Rs:5, 0:5, Rd:5, 0:5, 16#09:5>>, Context) ->
+   io:format("jalr reg(~p)~n", [Rs]),
+   Storage = context:get_storage(Context),
+   storage:write_reg(Storage, Rd, context:get_pc(Context)),
+   context:update_pc(storage:read_reg(Storage, Rs));
+
+
 % unknown instruction
 exec(Other, Context) ->
    io:format("unknown instruction : "),
@@ -199,16 +216,17 @@ exec(Other, Context) ->
    Context.
 
 start(HexData, EntryPoint) ->
-   spawn(fun() ->
-      Context = context:new_context(EntryPoint),
-      Storage = context:get_storage(Context),
-      lists:foreach(fun({Addr, Data}) ->
-         storage:write_mem(Storage, <<Addr:32>>, Data)
-      end, HexData),
-      run(Context)
-   end).
+   register(vm, spawn(erlang:node(), ?MODULE, run, [HexData, EntryPoint])).
 
-run(Context) ->
+run(HexData, EntryPoint) ->
+   Context = context:new_context(EntryPoint),
+   Storage = context:get_storage(Context),
+   lists:foreach(fun({Addr, Data}) ->
+      storage:write_mem(Storage, <<Addr:32>>, Data)
+   end, HexData),
+   run_loop(Context).
+
+run_loop(Context) ->
    receive
       Msg ->
          io:format("************************************~n"),
@@ -222,7 +240,7 @@ run(Context) ->
             Instruction = storage:read_mem(Storage, Address),
             NewContext = exec(Instruction, Context),
             recrio_debug:dump_context(NewContext),
-            run(NewContext)
+            run_loop(NewContext)
       end
    end.
 
